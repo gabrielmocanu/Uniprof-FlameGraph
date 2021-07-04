@@ -1,0 +1,6 @@
+[submodule "Uniprof"]
+	path = Uniprof
+	url = git@github.com:gabrielmocanu/uniprof.git
+[submodule "FlameGraph"]
+	path = FlameGraph
+	url = git@github.com:brendangregg/FlameGraph.git

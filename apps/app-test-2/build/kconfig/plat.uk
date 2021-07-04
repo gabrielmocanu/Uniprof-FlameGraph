@@ -1,0 +1,4 @@
+source "/root/gmocanu/unikraft/plat//kvm/Config.uk"
+source "/root/gmocanu/unikraft/plat//linuxu/Config.uk"
+source "/root/gmocanu/unikraft/plat//xen/Config.uk"
+source "/root/gmocanu/unikraft/plat/Config.uk"
