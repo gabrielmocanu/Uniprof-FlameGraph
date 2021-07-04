@@ -50,3 +50,9 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Apps
+apps/app-test-1/build/*
+apps/app-test-2/build/*
+apps/app-test-1/.config
+apps/app-test-2/.config
