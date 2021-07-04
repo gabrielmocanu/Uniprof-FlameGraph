@@ -31,7 +31,7 @@ int function_5(int a,int b)
 {
 	int i;
 	int ret = 0;	
-	for(i = 0; i < 50000; i++) {
+	for(i = 0; i < 100000; i++) {
 		ret = a + b;
 		printf("aux = %d\n",ret);
 	}
@@ -57,10 +57,8 @@ int function_1(int a,int b)
 
 int main(int argc, char *argv[])
 {
-	printf("Start\n");
 	int aux = 0;
 
 	aux = function_1(aux, 1);
 	aux = function_2(aux, 2);
-	printf("End\n");
 }

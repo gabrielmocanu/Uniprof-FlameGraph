@@ -5,62 +5,42 @@
 
 int function_3(int a)
 {
-	int i;
 	int ret = 0;
-	for(i = 0; i < 50000; i++) {
-		ret = a;
-		printf("aux = %d\n",ret);
-	}	
-	return ret;
-}
-
-
-int function_4(int a)
-{
-	int i = 0;
-	int ret = 0;	
-	for(i = 0; i < 50000; i++) {
-		ret = a;
-		printf("aux = %d\n",ret);
-	}
-	return ret;
-}
-
-
-int function_5(int a,int b)
-{
-	int i;
-	int ret = 0;	
-	for(i = 0; i < 50000; i++) {
-		ret = a + b;
-		printf("aux = %d\n",ret);
-	}
-
+	ret = a;
+	printf("aux = %d\n",ret);	
 	return ret;
 }
 
 int function_2(int a,int b)
 {
 	int ret = 0;
-	ret = function_4(b);
-	ret = function_5(a,b);
+	ret = a + b;
+	printf("aux = %d\n",ret);	
 	return ret;
 }
 
 int function_1(int a,int b)
 {
-
-	int ret = 0;	
-	ret = function_3(a);
+	int ret = 0;
+	ret = a - b;
+	printf("aux = %d\n",ret);		
 	return ret;
 }
 
 int main(int argc, char *argv[])
 {
-	printf("Start\n");
-	int aux = 0;
+	int aux = 100;
+	int i;
 
-	aux = function_1(aux, 1);
-	aux = function_2(aux, 2);
-	printf("End\n");
+	for(i = 0; i < 50000; i++){
+		aux = function_1(aux, 1);
+	}
+
+	for(i = 0; i < 50000; i++){
+		aux = function_2(aux, 2);
+	}
+	
+	for(i = 0; i < 50000; i++){
+		aux = function_3(aux, 2);
+	}
 }
