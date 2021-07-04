@@ -41,6 +41,6 @@ int main(int argc, char *argv[])
 	}
 	
 	for(i = 0; i < 50000; i++){
-		aux = function_3(aux, 2);
+		aux = function_3(aux);
 	}
 }
