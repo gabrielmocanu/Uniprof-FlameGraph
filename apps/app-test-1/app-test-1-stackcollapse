@@ -1,0 +1,5 @@
+main_thread_func;main;function_1;printf;vprintf;vfprintf;ukplat_coutk;hv_console_output;notify_remote_via_evtchn;hypercall_page 71
+main_thread_func;main;function_2;printf;vprintf;vfprintf;ukplat_coutk;hv_console_output;notify_remote_via_evtchn;hypercall_page 72
+main_thread_func;main;function_3;printf;vprintf;vfprintf;ukplat_coutk;hv_console_output;notify_remote_via_evtchn;hypercall_page 73
+ukplat_entry_argp;ukplat_terminate;flush_console;hv_console_flush 1
+ukplat_entry_argp;ukplat_terminate;hypercall_page 3
