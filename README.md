@@ -41,7 +41,7 @@ Here we have two main functions (function_1 and function_2). From the first func
 
 You can see that the rectangle for function_5 is 2 times larger than function_3 and function_4, and the rectangle for function_2 is 3 times larger than function_1, because it was in stack traces only for function_3, called by 50.000 compared to 200.000 calls in total.
 
-For this test you can see the source code in [apps/app-test-1](https://github.com/gabrielmocanu/Uniprof-FlameGraph/tree/main/apps/app-test-2).
+For this test you can see the source code in [apps/app-test-2](https://github.com/gabrielmocanu/Uniprof-FlameGraph/tree/main/apps/app-test-2).
 
 ![Flame Graph](./apps/app-test-2/app-test-2-flamegraph.svg)
 
