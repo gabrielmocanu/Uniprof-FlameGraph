@@ -70,4 +70,4 @@ Usage: generateFlameGraph.sh -f freq -t time -n domain -c path_to_conf -x path_t
 ```
 
 
-For more information about this project you can check out my documentation for my [Diploma Project](https://github.com/gabrielmocanu/uniprof/blob/main/Diploma_Project_Mocanu_Gabriel.pdf).
+For more information about this project you can check out my documentation for my [Diploma Project](https://github.com/gabrielmocanu/Uniprof-FlameGraph/blob/main/Diploma_Project_Mocanu_Gabriel.pdf).
