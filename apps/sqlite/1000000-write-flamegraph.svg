@@ -1,0 +1,1232 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="486" onload="init(evt)" viewBox="0 0 1200 486" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom();
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				clearzoom();
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x = txt.length - 2; x > 0; x--) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom() {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="486.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Flame Graph</text>
+<text id="details" x="10.00" y="469" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="469" > </text>
+<g id="frames">
+<g >
+<title>_fgets_r (805 samples, 67.08%)</title><rect x="395.5" y="357" width="791.5" height="15.0" fill="rgb(223,190,53)" rx="2" ry="2" />
+<text  x="398.47" y="367.5" >_fgets_r</text>
+</g>
+<g >
+<title>findElementWithHash (2 samples, 0.17%)</title><rect x="279.4" y="197" width="2.0" height="15.0" fill="rgb(210,116,33)" rx="2" ry="2" />
+<text  x="282.43" y="207.5" ></text>
+</g>
+<g >
+<title>sqlite3_prepare_v2 (70 samples, 5.83%)</title><rect x="215.5" y="309" width="68.8" height="15.0" fill="rgb(213,31,2)" rx="2" ry="2" />
+<text  x="218.52" y="319.5" >sqlite3..</text>
+</g>
+<g >
+<title>uk_syscall_e_readv (184 samples, 15.33%)</title><rect x="17.9" y="245" width="180.9" height="15.0" fill="rgb(246,103,43)" rx="2" ry="2" />
+<text  x="20.87" y="255.5" >uk_syscall_e_readv</text>
+</g>
+<g >
+<title>hypercall_page (3 samples, 0.25%)</title><rect x="1187.0" y="405" width="3.0" height="15.0" fill="rgb(250,124,21)" rx="2" ry="2" />
+<text  x="1190.05" y="415.5" ></text>
+</g>
+<g >
+<title>sqlite3LocateTable (4 samples, 0.33%)</title><rect x="277.5" y="213" width="3.9" height="15.0" fill="rgb(211,118,24)" rx="2" ry="2" />
+<text  x="280.47" y="223.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_lock (2 samples, 0.17%)</title><rect x="13.9" y="309" width="2.0" height="15.0" fill="rgb(216,188,11)" rx="2" ry="2" />
+<text  x="16.93" y="319.5" ></text>
+</g>
+<g >
+<title>sqlite3Malloc (4 samples, 0.33%)</title><rect x="351.2" y="197" width="3.9" height="15.0" fill="rgb(253,33,3)" rx="2" ry="2" />
+<text  x="354.22" y="207.5" ></text>
+</g>
+<g >
+<title>sqlite3Prepare (68 samples, 5.67%)</title><rect x="216.5" y="277" width="66.9" height="15.0" fill="rgb(225,158,51)" rx="2" ry="2" />
+<text  x="219.50" y="287.5" >sqlite3..</text>
+</g>
+<g >
+<title>sqlite3PagerCommitPhaseOne (1 samples, 0.08%)</title><rect x="370.9" y="245" width="1.0" height="15.0" fill="rgb(213,182,32)" rx="2" ry="2" />
+<text  x="373.88" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3BtreeInsert (63 samples, 5.25%)</title><rect x="300.1" y="277" width="61.9" height="15.0" fill="rgb(243,101,11)" rx="2" ry="2" />
+<text  x="303.08" y="287.5" >sqlite..</text>
+</g>
+<g >
+<title>sqlite3PagerUnrefNotNull (1 samples, 0.08%)</title><rect x="368.9" y="229" width="1.0" height="15.0" fill="rgb(253,184,25)" rx="2" ry="2" />
+<text  x="371.92" y="239.5" ></text>
+</g>
+<g >
+<title>uk_thread_wake (1 samples, 0.08%)</title><rect x="192.9" y="37" width="1.0" height="15.0" fill="rgb(253,18,20)" rx="2" ry="2" />
+<text  x="195.90" y="47.5" ></text>
+</g>
+<g >
+<title>sqlite3ExprSetHeightAndFlags.part.444 (2 samples, 0.17%)</title><rect x="249.9" y="229" width="2.0" height="15.0" fill="rgb(251,217,3)" rx="2" ry="2" />
+<text  x="252.93" y="239.5" ></text>
+</g>
+<g >
+<title>__getreent (1 samples, 0.08%)</title><rect x="16.9" y="325" width="1.0" height="15.0" fill="rgb(228,190,4)" rx="2" ry="2" />
+<text  x="19.88" y="335.5" ></text>
+</g>
+<g >
+<title>sqlite3MallocZero (3 samples, 0.25%)</title><rect x="355.1" y="229" width="3.0" height="15.0" fill="rgb(229,22,44)" rx="2" ry="2" />
+<text  x="358.15" y="239.5" ></text>
+</g>
+<g >
+<title>sqlite3VdbeMemStringify (5 samples, 0.42%)</title><rect x="383.7" y="245" width="4.9" height="15.0" fill="rgb(238,222,50)" rx="2" ry="2" />
+<text  x="386.67" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite_main (1,197 samples, 99.75%)</title><rect x="10.0" y="405" width="1177.0" height="15.0" fill="rgb(253,32,32)" rx="2" ry="2" />
+<text  x="13.00" y="415.5" >sqlite_main</text>
+</g>
+<g >
+<title>strlen (2 samples, 0.17%)</title><rect x="263.7" y="213" width="2.0" height="15.0" fill="rgb(234,92,42)" rx="2" ry="2" />
+<text  x="266.70" y="223.5" ></text>
+</g>
+<g >
+<title>sqlite3FindFunction (1 samples, 0.08%)</title><rect x="257.8" y="181" width="1.0" height="15.0" fill="rgb(224,135,13)" rx="2" ry="2" />
+<text  x="260.80" y="191.5" ></text>
+</g>
+<g >
+<title>sqlite3MemMalloc (1 samples, 0.08%)</title><rect x="354.2" y="181" width="0.9" height="15.0" fill="rgb(247,53,4)" rx="2" ry="2" />
+<text  x="357.17" y="191.5" ></text>
+</g>
+<g >
+<title>getAndInitPage (1 samples, 0.08%)</title><rect x="366.0" y="245" width="0.9" height="15.0" fill="rgb(232,223,12)" rx="2" ry="2" />
+<text  x="368.97" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3VdbeMemCast (6 samples, 0.50%)</title><rect x="383.7" y="277" width="5.9" height="15.0" fill="rgb(226,23,18)" rx="2" ry="2" />
+<text  x="386.67" y="287.5" ></text>
+</g>
+<g >
+<title>sqlite3FunctionSearch (1 samples, 0.08%)</title><rect x="274.5" y="165" width="1.0" height="15.0" fill="rgb(232,95,50)" rx="2" ry="2" />
+<text  x="277.52" y="175.5" ></text>
+</g>
+<g >
+<title>sqlite3ExprFunction (1 samples, 0.08%)</title><rect x="216.5" y="261" width="1.0" height="15.0" fill="rgb(251,123,46)" rx="2" ry="2" />
+<text  x="219.50" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3ExprCodeTarget (2 samples, 0.17%)</title><rect x="256.8" y="213" width="2.0" height="15.0" fill="rgb(232,57,38)" rx="2" ry="2" />
+<text  x="259.82" y="223.5" ></text>
+</g>
+<g >
+<title>uk_syscall_e_readv (805 samples, 67.08%)</title><rect x="395.5" y="277" width="791.5" height="15.0" fill="rgb(236,0,28)" rx="2" ry="2" />
+<text  x="398.47" y="287.5" >uk_syscall_e_readv</text>
+</g>
+<g >
+<title>sqlite3_randomness.part.488 (1 samples, 0.08%)</title><rect x="293.2" y="261" width="1.0" height="15.0" fill="rgb(242,191,22)" rx="2" ry="2" />
+<text  x="296.20" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3PcacheFetchFinish (1 samples, 0.08%)</title><rect x="366.0" y="229" width="0.9" height="15.0" fill="rgb(236,41,22)" rx="2" ry="2" />
+<text  x="368.97" y="239.5" ></text>
+</g>
+<g >
+<title>insertCell (60 samples, 5.00%)</title><rect x="302.1" y="261" width="58.9" height="15.0" fill="rgb(211,121,42)" rx="2" ry="2" />
+<text  x="305.05" y="271.5" >insert..</text>
+</g>
+<g >
+<title>shell_exec (184 samples, 15.33%)</title><rect x="208.6" y="325" width="181.0" height="15.0" fill="rgb(206,113,23)" rx="2" ry="2" />
+<text  x="211.63" y="335.5" >shell_exec</text>
+</g>
+<g >
+<title>pthread_setcancelstate (2 samples, 0.17%)</title><rect x="13.9" y="325" width="2.0" height="15.0" fill="rgb(237,164,8)" rx="2" ry="2" />
+<text  x="16.93" y="335.5" ></text>
+</g>
+<g >
+<title>sqlite3SrcListDelete (1 samples, 0.08%)</title><rect x="255.8" y="213" width="1.0" height="15.0" fill="rgb(248,167,32)" rx="2" ry="2" />
+<text  x="258.83" y="223.5" ></text>
+</g>
+<g >
+<title>sqlite3PagerSharedLock (1 samples, 0.08%)</title><rect x="299.1" y="261" width="1.0" height="15.0" fill="rgb(236,84,36)" rx="2" ry="2" />
+<text  x="302.10" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3BtreeCommitPhaseOne.part.534 (1 samples, 0.08%)</title><rect x="370.9" y="261" width="1.0" height="15.0" fill="rgb(226,51,11)" rx="2" ry="2" />
+<text  x="373.88" y="271.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_unlock (1 samples, 0.08%)</title><rect x="353.2" y="181" width="1.0" height="15.0" fill="rgb(245,100,49)" rx="2" ry="2" />
+<text  x="356.18" y="191.5" ></text>
+</g>
+<g >
+<title>do_preadv (184 samples, 15.33%)</title><rect x="17.9" y="229" width="180.9" height="15.0" fill="rgb(232,71,44)" rx="2" ry="2" />
+<text  x="20.87" y="239.5" >do_preadv</text>
+</g>
+<g >
+<title>sqlite3ExprFunction (3 samples, 0.25%)</title><rect x="248.9" y="245" width="3.0" height="15.0" fill="rgb(213,113,17)" rx="2" ry="2" />
+<text  x="251.95" y="255.5" ></text>
+</g>
+<g >
+<title>hypercall_page (1 samples, 0.08%)</title><rect x="1159.5" y="149" width="1.0" height="15.0" fill="rgb(249,82,47)" rx="2" ry="2" />
+<text  x="1162.52" y="159.5" ></text>
+</g>
+<g >
+<title>sqlite3VdbeFinalize (3 samples, 0.25%)</title><rect x="212.6" y="293" width="2.9" height="15.0" fill="rgb(249,142,12)" rx="2" ry="2" />
+<text  x="215.57" y="303.5" ></text>
+</g>
+<g >
+<title>uk_sched_get_default (1 samples, 0.08%)</title><rect x="12.9" y="325" width="1.0" height="15.0" fill="rgb(219,63,10)" rx="2" ry="2" />
+<text  x="15.95" y="335.5" ></text>
+</g>
+<g >
+<title>matchQuality (1 samples, 0.08%)</title><rect x="273.5" y="165" width="1.0" height="15.0" fill="rgb(213,205,31)" rx="2" ry="2" />
+<text  x="276.53" y="175.5" ></text>
+</g>
+<g >
+<title>memcpy (1 samples, 0.08%)</title><rect x="203.7" y="325" width="1.0" height="15.0" fill="rgb(248,191,15)" rx="2" ry="2" />
+<text  x="206.72" y="335.5" ></text>
+</g>
+<g >
+<title>sqlite3SelectNew (1 samples, 0.08%)</title><rect x="281.4" y="245" width="1.0" height="15.0" fill="rgb(215,171,15)" rx="2" ry="2" />
+<text  x="284.40" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3ExprAlloc (1 samples, 0.08%)</title><rect x="248.9" y="229" width="1.0" height="15.0" fill="rgb(225,174,18)" rx="2" ry="2" />
+<text  x="251.95" y="239.5" ></text>
+</g>
+<g >
+<title>pager_write (1 samples, 0.08%)</title><rect x="300.1" y="229" width="1.0" height="15.0" fill="rgb(218,110,36)" rx="2" ry="2" />
+<text  x="303.08" y="239.5" ></text>
+</g>
+<g >
+<title>process_input (1,197 samples, 99.75%)</title><rect x="10.0" y="389" width="1177.0" height="15.0" fill="rgb(227,214,37)" rx="2" ry="2" />
+<text  x="13.00" y="399.5" >process_input</text>
+</g>
+<g >
+<title>__locale_ctype_ptr (2 samples, 0.17%)</title><rect x="206.7" y="325" width="1.9" height="15.0" fill="rgb(238,37,12)" rx="2" ry="2" />
+<text  x="209.67" y="335.5" ></text>
+</g>
+<g >
+<title>getPageNormal (1 samples, 0.08%)</title><rect x="298.1" y="261" width="1.0" height="15.0" fill="rgb(238,228,32)" rx="2" ry="2" />
+<text  x="301.12" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3_finalize (1 samples, 0.08%)</title><rect x="389.6" y="325" width="0.9" height="15.0" fill="rgb(252,126,15)" rx="2" ry="2" />
+<text  x="392.57" y="335.5" ></text>
+</g>
+<g >
+<title>_read_r (184 samples, 15.33%)</title><rect x="17.9" y="277" width="180.9" height="15.0" fill="rgb(238,194,4)" rx="2" ry="2" />
+<text  x="20.87" y="287.5" >_read_r</text>
+</g>
+<g >
+<title>sqlite3RunParser (1 samples, 0.08%)</title><rect x="283.4" y="277" width="0.9" height="15.0" fill="rgb(249,48,44)" rx="2" ry="2" />
+<text  x="286.37" y="287.5" ></text>
+</g>
+<g >
+<title>insertCell (1 samples, 0.08%)</title><rect x="301.1" y="245" width="1.0" height="15.0" fill="rgb(231,62,33)" rx="2" ry="2" />
+<text  x="304.07" y="255.5" ></text>
+</g>
+<g >
+<title>pager_unlock (1 samples, 0.08%)</title><rect x="382.7" y="245" width="1.0" height="15.0" fill="rgb(231,46,14)" rx="2" ry="2" />
+<text  x="385.68" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3_str_vappendf (5 samples, 0.42%)</title><rect x="383.7" y="213" width="4.9" height="15.0" fill="rgb(240,72,23)" rx="2" ry="2" />
+<text  x="386.67" y="223.5" ></text>
+</g>
+<g >
+<title>sqlite3LeaveMutexAndCloseZombie (1 samples, 0.08%)</title><rect x="211.6" y="309" width="1.0" height="15.0" fill="rgb(254,9,45)" rx="2" ry="2" />
+<text  x="214.58" y="319.5" ></text>
+</g>
+<g >
+<title>__locale_ctype_ptr (1 samples, 0.08%)</title><rect x="210.6" y="309" width="1.0" height="15.0" fill="rgb(248,172,19)" rx="2" ry="2" />
+<text  x="213.60" y="319.5" ></text>
+</g>
+<g >
+<title>__getreent (1 samples, 0.08%)</title><rect x="210.6" y="293" width="1.0" height="15.0" fill="rgb(248,179,4)" rx="2" ry="2" />
+<text  x="213.60" y="303.5" ></text>
+</g>
+<g >
+<title>sqlite3FindFunction (1 samples, 0.08%)</title><rect x="275.5" y="181" width="1.0" height="15.0" fill="rgb(214,229,4)" rx="2" ry="2" />
+<text  x="278.50" y="191.5" ></text>
+</g>
+<g >
+<title>sqlite3VdbeChangeP4 (1 samples, 0.08%)</title><rect x="258.8" y="213" width="1.0" height="15.0" fill="rgb(244,136,45)" rx="2" ry="2" />
+<text  x="261.78" y="223.5" ></text>
+</g>
+<g >
+<title>memcpy (1 samples, 0.08%)</title><rect x="300.1" y="181" width="1.0" height="15.0" fill="rgb(244,207,10)" rx="2" ry="2" />
+<text  x="303.08" y="191.5" ></text>
+</g>
+<g >
+<title>sqlite3_finalize (3 samples, 0.25%)</title><rect x="212.6" y="309" width="2.9" height="15.0" fill="rgb(229,0,46)" rx="2" ry="2" />
+<text  x="215.57" y="319.5" ></text>
+</g>
+<g >
+<title>pagerUnlockAndRollback (1 samples, 0.08%)</title><rect x="373.8" y="245" width="1.0" height="15.0" fill="rgb(217,198,42)" rx="2" ry="2" />
+<text  x="376.83" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3Malloc (3 samples, 0.25%)</title><rect x="355.1" y="213" width="3.0" height="15.0" fill="rgb(244,169,47)" rx="2" ry="2" />
+<text  x="358.15" y="223.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_lock (1 samples, 0.08%)</title><rect x="359.1" y="197" width="1.0" height="15.0" fill="rgb(244,41,6)" rx="2" ry="2" />
+<text  x="362.08" y="207.5" ></text>
+</g>
+<g >
+<title>memchr (1 samples, 0.08%)</title><rect x="202.7" y="325" width="1.0" height="15.0" fill="rgb(241,61,44)" rx="2" ry="2" />
+<text  x="205.73" y="335.5" ></text>
+</g>
+<g >
+<title>pthread_setcancelstate (1 samples, 0.08%)</title><rect x="204.7" y="341" width="1.0" height="15.0" fill="rgb(244,183,0)" rx="2" ry="2" />
+<text  x="207.70" y="351.5" ></text>
+</g>
+<g >
+<title>vfs_read (805 samples, 67.08%)</title><rect x="395.5" y="229" width="791.5" height="15.0" fill="rgb(253,74,0)" rx="2" ry="2" />
+<text  x="398.47" y="239.5" >vfs_read</text>
+</g>
+<g >
+<title>sqlite3VdbeDelete (1 samples, 0.08%)</title><rect x="213.5" y="277" width="1.0" height="15.0" fill="rgb(237,100,11)" rx="2" ry="2" />
+<text  x="216.55" y="287.5" ></text>
+</g>
+<g >
+<title>hypervisor_callback2 (3 samples, 0.25%)</title><rect x="190.9" y="85" width="3.0" height="15.0" fill="rgb(219,13,33)" rx="2" ry="2" />
+<text  x="193.93" y="95.5" ></text>
+</g>
+<g >
+<title>runOneSqlLine (189 samples, 15.75%)</title><rect x="205.7" y="341" width="185.8" height="15.0" fill="rgb(253,108,28)" rx="2" ry="2" />
+<text  x="208.68" y="351.5" >runOneSqlLine</text>
+</g>
+<g >
+<title>btreeGetPage (2 samples, 0.17%)</title><rect x="296.1" y="261" width="2.0" height="15.0" fill="rgb(231,229,22)" rx="2" ry="2" />
+<text  x="299.15" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3ExprListDelete (1 samples, 0.08%)</title><rect x="260.8" y="229" width="0.9" height="15.0" fill="rgb(224,146,34)" rx="2" ry="2" />
+<text  x="263.75" y="239.5" ></text>
+</g>
+<g >
+<title>ukplat_lcpu_halt_to (175 samples, 14.58%)</title><rect x="21.8" y="117" width="172.1" height="15.0" fill="rgb(222,228,4)" rx="2" ry="2" />
+<text  x="24.80" y="127.5" >ukplat_lcpu_halt_to</text>
+</g>
+<g >
+<title>sw_ctx_switch (5 samples, 0.42%)</title><rect x="193.9" y="133" width="4.9" height="15.0" fill="rgb(234,153,37)" rx="2" ry="2" />
+<text  x="196.88" y="143.5" ></text>
+</g>
+<g >
+<title>sqlite3SrcListAppend (1 samples, 0.08%)</title><rect x="282.4" y="261" width="1.0" height="15.0" fill="rgb(243,169,1)" rx="2" ry="2" />
+<text  x="285.38" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3RunParser (60 samples, 5.00%)</title><rect x="223.4" y="261" width="59.0" height="15.0" fill="rgb(248,82,30)" rx="2" ry="2" />
+<text  x="226.38" y="271.5" >sqlite..</text>
+</g>
+<g >
+<title>pthread_mutex_unlock (1 samples, 0.08%)</title><rect x="360.1" y="197" width="0.9" height="15.0" fill="rgb(214,103,9)" rx="2" ry="2" />
+<text  x="363.07" y="207.5" ></text>
+</g>
+<g >
+<title>sqlite3Insert (1 samples, 0.08%)</title><rect x="222.4" y="261" width="1.0" height="15.0" fill="rgb(242,138,50)" rx="2" ry="2" />
+<text  x="225.40" y="271.5" ></text>
+</g>
+<g >
+<title>pthread_setcancelstate (3 samples, 0.25%)</title><rect x="199.8" y="309" width="2.9" height="15.0" fill="rgb(252,227,18)" rx="2" ry="2" />
+<text  x="202.78" y="319.5" ></text>
+</g>
+<g >
+<title>uk_9pfs_read (184 samples, 15.33%)</title><rect x="17.9" y="181" width="180.9" height="15.0" fill="rgb(237,13,30)" rx="2" ry="2" />
+<text  x="20.87" y="191.5" >uk_9pfs_read</text>
+</g>
+<g >
+<title>p9front_request (1 samples, 0.08%)</title><rect x="20.8" y="133" width="1.0" height="15.0" fill="rgb(205,194,47)" rx="2" ry="2" />
+<text  x="23.82" y="143.5" ></text>
+</g>
+<g >
+<title>pthread_self (1 samples, 0.08%)</title><rect x="201.8" y="293" width="0.9" height="15.0" fill="rgb(230,208,15)" rx="2" ry="2" />
+<text  x="204.75" y="303.5" ></text>
+</g>
+<g >
+<title>schedcoop_schedule (175 samples, 14.58%)</title><rect x="21.8" y="133" width="172.1" height="15.0" fill="rgb(211,150,49)" rx="2" ry="2" />
+<text  x="24.80" y="143.5" >schedcoop_schedule</text>
+</g>
+<g >
+<title>main_thread_func (1,197 samples, 99.75%)</title><rect x="10.0" y="421" width="1177.0" height="15.0" fill="rgb(217,4,51)" rx="2" ry="2" />
+<text  x="13.00" y="431.5" >main_thread_func</text>
+</g>
+<g >
+<title>pcache1Fetch (2 samples, 0.17%)</title><rect x="296.1" y="245" width="2.0" height="15.0" fill="rgb(254,113,47)" rx="2" ry="2" />
+<text  x="299.15" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3BtreeCommitPhaseTwo.part.509 (12 samples, 1.00%)</title><rect x="371.9" y="261" width="11.8" height="15.0" fill="rgb(231,99,10)" rx="2" ry="2" />
+<text  x="374.87" y="271.5" ></text>
+</g>
+<g >
+<title>bbuddy_palloc (1 samples, 0.08%)</title><rect x="354.2" y="149" width="0.9" height="15.0" fill="rgb(236,121,40)" rx="2" ry="2" />
+<text  x="357.17" y="159.5" ></text>
+</g>
+<g >
+<title>do_hypervisor_callback (2 samples, 0.17%)</title><rect x="191.9" y="69" width="2.0" height="15.0" fill="rgb(209,197,1)" rx="2" ry="2" />
+<text  x="194.92" y="79.5" ></text>
+</g>
+<g >
+<title>do_preadv (805 samples, 67.08%)</title><rect x="395.5" y="261" width="791.5" height="15.0" fill="rgb(210,86,34)" rx="2" ry="2" />
+<text  x="398.47" y="271.5" >do_preadv</text>
+</g>
+<g >
+<title>uk_9p_read (184 samples, 15.33%)</title><rect x="17.9" y="165" width="180.9" height="15.0" fill="rgb(234,37,6)" rx="2" ry="2" />
+<text  x="20.87" y="175.5" >uk_9p_read</text>
+</g>
+<g >
+<title>sqlite3GetVdbe.part.394 (1 samples, 0.08%)</title><rect x="251.9" y="245" width="1.0" height="15.0" fill="rgb(243,131,3)" rx="2" ry="2" />
+<text  x="254.90" y="255.5" ></text>
+</g>
+<g >
+<title>pthread_getspecific (1 samples, 0.08%)</title><rect x="199.8" y="293" width="1.0" height="15.0" fill="rgb(251,220,8)" rx="2" ry="2" />
+<text  x="202.78" y="303.5" ></text>
+</g>
+<g >
+<title>randomFunc (2 samples, 0.17%)</title><rect x="292.2" y="277" width="2.0" height="15.0" fill="rgb(225,136,44)" rx="2" ry="2" />
+<text  x="295.22" y="287.5" ></text>
+</g>
+<g >
+<title>__locale_ctype_ptr (1 samples, 0.08%)</title><rect x="12.9" y="341" width="1.0" height="15.0" fill="rgb(214,180,27)" rx="2" ry="2" />
+<text  x="15.95" y="351.5" ></text>
+</g>
+<g >
+<title>memjrnlWrite (52 samples, 4.33%)</title><rect x="304.0" y="213" width="51.1" height="15.0" fill="rgb(248,97,5)" rx="2" ry="2" />
+<text  x="307.02" y="223.5" >memjr..</text>
+</g>
+<g >
+<title>hypercall_page (3 samples, 0.25%)</title><rect x="17.9" y="133" width="2.9" height="15.0" fill="rgb(211,179,29)" rx="2" ry="2" />
+<text  x="20.87" y="143.5" ></text>
+</g>
+<g >
+<title>pager_unlock (1 samples, 0.08%)</title><rect x="369.9" y="261" width="1.0" height="15.0" fill="rgb(232,5,45)" rx="2" ry="2" />
+<text  x="372.90" y="271.5" ></text>
+</g>
+<g >
+<title>do_hypervisor_callback (1 samples, 0.08%)</title><rect x="1159.5" y="181" width="1.0" height="15.0" fill="rgb(226,49,27)" rx="2" ry="2" />
+<text  x="1162.52" y="191.5" ></text>
+</g>
+<g >
+<title>applyAffinity (6 samples, 0.50%)</title><rect x="383.7" y="261" width="5.9" height="15.0" fill="rgb(223,44,52)" rx="2" ry="2" />
+<text  x="386.67" y="271.5" ></text>
+</g>
+<g >
+<title>_fgets_r (188 samples, 15.67%)</title><rect x="17.9" y="325" width="184.8" height="15.0" fill="rgb(236,144,38)" rx="2" ry="2" />
+<text  x="20.87" y="335.5" >_fgets_r</text>
+</g>
+<g >
+<title>sqlite3VdbeExec (103 samples, 8.58%)</title><rect x="288.3" y="293" width="101.3" height="15.0" fill="rgb(242,47,3)" rx="2" ry="2" />
+<text  x="291.28" y="303.5" >sqlite3VdbeE..</text>
+</g>
+<g >
+<title>writeJournalHdr (3 samples, 0.25%)</title><rect x="358.1" y="229" width="2.9" height="15.0" fill="rgb(218,6,46)" rx="2" ry="2" />
+<text  x="361.10" y="239.5" ></text>
+</g>
+<g >
+<title>uk_9pdev_request (4 samples, 0.33%)</title><rect x="17.9" y="149" width="3.9" height="15.0" fill="rgb(206,149,29)" rx="2" ry="2" />
+<text  x="20.87" y="159.5" ></text>
+</g>
+<g >
+<title>local_getline (192 samples, 16.00%)</title><rect x="15.9" y="341" width="188.8" height="15.0" fill="rgb(236,77,41)" rx="2" ry="2" />
+<text  x="18.90" y="351.5" >local_getline</text>
+</g>
+<g >
+<title>sqlite3OpenTableAndIndices.part.458 (3 samples, 0.25%)</title><rect x="265.7" y="229" width="2.9" height="15.0" fill="rgb(244,23,10)" rx="2" ry="2" />
+<text  x="268.67" y="239.5" ></text>
+</g>
+<g >
+<title>freeP4FuncCtx (1 samples, 0.08%)</title><rect x="213.5" y="229" width="1.0" height="15.0" fill="rgb(220,142,14)" rx="2" ry="2" />
+<text  x="216.55" y="239.5" ></text>
+</g>
+<g >
+<title>sys_read (805 samples, 67.08%)</title><rect x="395.5" y="245" width="791.5" height="15.0" fill="rgb(235,121,36)" rx="2" ry="2" />
+<text  x="398.47" y="255.5" >sys_read</text>
+</g>
+<g >
+<title>all (1,200 samples, 100%)</title><rect x="10.0" y="437" width="1180.0" height="15.0" fill="rgb(245,134,26)" rx="2" ry="2" />
+<text  x="13.00" y="447.5" ></text>
+</g>
+<g >
+<title>sqlite3_complete (3 samples, 0.25%)</title><rect x="391.5" y="341" width="3.0" height="15.0" fill="rgb(231,148,30)" rx="2" ry="2" />
+<text  x="394.53" y="351.5" ></text>
+</g>
+<g >
+<title>sqlite3LockAndPrepare (70 samples, 5.83%)</title><rect x="215.5" y="293" width="68.8" height="15.0" fill="rgb(234,65,42)" rx="2" ry="2" />
+<text  x="218.52" y="303.5" >sqlite3..</text>
+</g>
+<g >
+<title>__sread (184 samples, 15.33%)</title><rect x="17.9" y="293" width="180.9" height="15.0" fill="rgb(227,98,16)" rx="2" ry="2" />
+<text  x="20.87" y="303.5" >__sread</text>
+</g>
+<g >
+<title>sqlite3_str_appendf (5 samples, 0.42%)</title><rect x="383.7" y="229" width="4.9" height="15.0" fill="rgb(223,166,52)" rx="2" ry="2" />
+<text  x="386.67" y="239.5" ></text>
+</g>
+<g >
+<title>sqlite3TableLock (2 samples, 0.17%)</title><rect x="266.6" y="197" width="2.0" height="15.0" fill="rgb(213,127,28)" rx="2" ry="2" />
+<text  x="269.65" y="207.5" ></text>
+</g>
+<g >
+<title>hypervisor_callback2 (1 samples, 0.08%)</title><rect x="1159.5" y="197" width="1.0" height="15.0" fill="rgb(226,27,54)" rx="2" ry="2" />
+<text  x="1162.52" y="207.5" ></text>
+</g>
+<g >
+<title>time_block_until (173 samples, 14.42%)</title><rect x="23.8" y="101" width="170.1" height="15.0" fill="rgb(251,205,20)" rx="2" ry="2" />
+<text  x="26.77" y="111.5" >time_block_until</text>
+</g>
+<g >
+<title>__srefill_r (805 samples, 67.08%)</title><rect x="395.5" y="341" width="791.5" height="15.0" fill="rgb(220,173,3)" rx="2" ry="2" />
+<text  x="398.47" y="351.5" >__srefill_r</text>
+</g>
+<g >
+<title>do_event (1 samples, 0.08%)</title><rect x="1159.5" y="165" width="1.0" height="15.0" fill="rgb(239,206,36)" rx="2" ry="2" />
+<text  x="1162.52" y="175.5" ></text>
+</g>
+<g >
+<title>memjrnlClose (7 samples, 0.58%)</title><rect x="375.8" y="229" width="6.9" height="15.0" fill="rgb(209,188,12)" rx="2" ry="2" />
+<text  x="378.80" y="239.5" ></text>
+</g>
+<g >
+<title>sqlite3SrcListLookup (4 samples, 0.33%)</title><rect x="277.5" y="229" width="3.9" height="15.0" fill="rgb(235,145,29)" rx="2" ry="2" />
+<text  x="280.47" y="239.5" ></text>
+</g>
+<g >
+<title>memjrnlWrite (1 samples, 0.08%)</title><rect x="300.1" y="197" width="1.0" height="15.0" fill="rgb(254,97,5)" rx="2" ry="2" />
+<text  x="303.08" y="207.5" ></text>
+</g>
+<g >
+<title>sqlite3GenerateConstraintChecks (4 samples, 0.33%)</title><rect x="261.7" y="229" width="4.0" height="15.0" fill="rgb(213,182,9)" rx="2" ry="2" />
+<text  x="264.73" y="239.5" ></text>
+</g>
+<g >
+<title>ukplat_cink (27 samples, 2.25%)</title><rect x="1160.5" y="197" width="26.5" height="15.0" fill="rgb(223,35,26)" rx="2" ry="2" />
+<text  x="1163.50" y="207.5" >u..</text>
+</g>
+<g >
+<title>pager_end_transaction (8 samples, 0.67%)</title><rect x="374.8" y="245" width="7.9" height="15.0" fill="rgb(231,77,45)" rx="2" ry="2" />
+<text  x="377.82" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3_randomness.part.488 (2 samples, 0.17%)</title><rect x="359.1" y="213" width="1.9" height="15.0" fill="rgb(233,199,42)" rx="2" ry="2" />
+<text  x="362.08" y="223.5" ></text>
+</g>
+<g >
+<title>walkExpr (1 samples, 0.08%)</title><rect x="259.8" y="213" width="1.0" height="15.0" fill="rgb(233,224,12)" rx="2" ry="2" />
+<text  x="262.77" y="223.5" ></text>
+</g>
+<g >
+<title>sqlite3BtreeBeginTrans (6 samples, 0.50%)</title><rect x="294.2" y="277" width="5.9" height="15.0" fill="rgb(242,110,42)" rx="2" ry="2" />
+<text  x="297.18" y="287.5" ></text>
+</g>
+<g >
+<title>sqlite3_step (107 samples, 8.92%)</title><rect x="284.3" y="309" width="105.3" height="15.0" fill="rgb(227,8,2)" rx="2" ry="2" />
+<text  x="287.35" y="319.5" >sqlite3_step</text>
+</g>
+<g >
+<title>keywordCode.part.219 (5 samples, 0.42%)</title><rect x="243.0" y="245" width="5.0" height="15.0" fill="rgb(220,27,53)" rx="2" ry="2" />
+<text  x="246.05" y="255.5" ></text>
+</g>
+<g >
+<title>do_meta_command (392 samples, 32.67%)</title><rect x="10.0" y="373" width="385.5" height="15.0" fill="rgb(210,158,42)" rx="2" ry="2" />
+<text  x="13.00" y="383.5" >do_meta_command</text>
+</g>
+<g >
+<title>memcpy (46 samples, 3.83%)</title><rect x="306.0" y="197" width="45.2" height="15.0" fill="rgb(230,30,6)" rx="2" ry="2" />
+<text  x="308.98" y="207.5" >memcpy</text>
+</g>
+<g >
+<title>closeCursorsInFrame.part.532 (2 samples, 0.17%)</title><rect x="367.9" y="261" width="2.0" height="15.0" fill="rgb(251,207,35)" rx="2" ry="2" />
+<text  x="370.93" y="271.5" ></text>
+</g>
+<g >
+<title>balance (2 samples, 0.17%)</title><rect x="300.1" y="261" width="2.0" height="15.0" fill="rgb(219,223,52)" rx="2" ry="2" />
+<text  x="303.08" y="271.5" ></text>
+</g>
+<g >
+<title>pcache1Fetch (2 samples, 0.17%)</title><rect x="364.0" y="229" width="2.0" height="15.0" fill="rgb(214,0,23)" rx="2" ry="2" />
+<text  x="367.00" y="239.5" ></text>
+</g>
+<g >
+<title>stdio_read (805 samples, 67.08%)</title><rect x="395.5" y="213" width="791.5" height="15.0" fill="rgb(213,159,22)" rx="2" ry="2" />
+<text  x="398.47" y="223.5" >stdio_read</text>
+</g>
+<g >
+<title>sqlite3BtreeMovetoUnpacked (1 samples, 0.08%)</title><rect x="361.0" y="261" width="1.0" height="15.0" fill="rgb(247,213,18)" rx="2" ry="2" />
+<text  x="364.05" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3SchemaToIndex.part.180 (1 samples, 0.08%)</title><rect x="276.5" y="229" width="1.0" height="15.0" fill="rgb(249,128,29)" rx="2" ry="2" />
+<text  x="279.48" y="239.5" ></text>
+</g>
+<g >
+<title>moveToRightmost (4 samples, 0.33%)</title><rect x="362.0" y="261" width="4.0" height="15.0" fill="rgb(222,96,12)" rx="2" ry="2" />
+<text  x="365.03" y="271.5" ></text>
+</g>
+<g >
+<title>memcpy (1 samples, 0.08%)</title><rect x="198.8" y="309" width="1.0" height="15.0" fill="rgb(211,148,0)" rx="2" ry="2" />
+<text  x="201.80" y="319.5" ></text>
+</g>
+<g >
+<title>uk_syscall_e_read (184 samples, 15.33%)</title><rect x="17.9" y="261" width="180.9" height="15.0" fill="rgb(234,192,44)" rx="2" ry="2" />
+<text  x="20.87" y="271.5" >uk_syscall_e_read</text>
+</g>
+<g >
+<title>uk_stub_thread_entry (3 samples, 0.25%)</title><rect x="1187.0" y="421" width="3.0" height="15.0" fill="rgb(235,206,39)" rx="2" ry="2" />
+<text  x="1190.05" y="431.5" ></text>
+</g>
+<g >
+<title>allocateBtreePage (1 samples, 0.08%)</title><rect x="300.1" y="245" width="1.0" height="15.0" fill="rgb(209,154,11)" rx="2" ry="2" />
+<text  x="303.08" y="255.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_lock (2 samples, 0.17%)</title><rect x="351.2" y="181" width="2.0" height="15.0" fill="rgb(209,50,43)" rx="2" ry="2" />
+<text  x="354.22" y="191.5" ></text>
+</g>
+<g >
+<title>do_event (2 samples, 0.17%)</title><rect x="191.9" y="53" width="2.0" height="15.0" fill="rgb(210,72,9)" rx="2" ry="2" />
+<text  x="194.92" y="63.5" ></text>
+</g>
+<g >
+<title>hypercall_page (170 samples, 14.17%)</title><rect x="23.8" y="85" width="167.1" height="15.0" fill="rgb(243,157,29)" rx="2" ry="2" />
+<text  x="26.77" y="95.5" >hypercall_page</text>
+</g>
+<g >
+<title>__sread (805 samples, 67.08%)</title><rect x="395.5" y="325" width="791.5" height="15.0" fill="rgb(220,178,51)" rx="2" ry="2" />
+<text  x="398.47" y="335.5" >__sread</text>
+</g>
+<g >
+<title>process_input (392 samples, 32.67%)</title><rect x="10.0" y="357" width="385.5" height="15.0" fill="rgb(208,214,45)" rx="2" ry="2" />
+<text  x="13.00" y="367.5" >process_input</text>
+</g>
+<g >
+<title>_read_r (805 samples, 67.08%)</title><rect x="395.5" y="309" width="791.5" height="15.0" fill="rgb(213,136,9)" rx="2" ry="2" />
+<text  x="398.47" y="319.5" >_read_r</text>
+</g>
+<g >
+<title>memset (1 samples, 0.08%)</title><rect x="302.1" y="229" width="0.9" height="15.0" fill="rgb(236,194,21)" rx="2" ry="2" />
+<text  x="305.05" y="239.5" ></text>
+</g>
+<g >
+<title>hypercall_page (2 samples, 0.17%)</title><rect x="21.8" y="101" width="2.0" height="15.0" fill="rgb(217,160,5)" rx="2" ry="2" />
+<text  x="24.80" y="111.5" ></text>
+</g>
+<g >
+<title>_fflush_r (2 samples, 0.17%)</title><rect x="13.9" y="341" width="2.0" height="15.0" fill="rgb(231,149,52)" rx="2" ry="2" />
+<text  x="16.93" y="351.5" ></text>
+</g>
+<g >
+<title>vfs_read (184 samples, 15.33%)</title><rect x="17.9" y="197" width="180.9" height="15.0" fill="rgb(250,184,13)" rx="2" ry="2" />
+<text  x="20.87" y="207.5" >vfs_read</text>
+</g>
+<g >
+<title>sqlite3ResolveExprListNames.part.443 (8 samples, 0.67%)</title><rect x="268.6" y="229" width="7.9" height="15.0" fill="rgb(210,214,11)" rx="2" ry="2" />
+<text  x="271.62" y="239.5" ></text>
+</g>
+<g >
+<title>vdbeFreeOpArray (1 samples, 0.08%)</title><rect x="213.5" y="245" width="1.0" height="15.0" fill="rgb(246,59,10)" rx="2" ry="2" />
+<text  x="216.55" y="255.5" ></text>
+</g>
+<g >
+<title>walkExpr (8 samples, 0.67%)</title><rect x="268.6" y="197" width="7.9" height="15.0" fill="rgb(250,83,23)" rx="2" ry="2" />
+<text  x="271.62" y="207.5" ></text>
+</g>
+<g >
+<title>sqlite3ExprCode (4 samples, 0.33%)</title><rect x="256.8" y="229" width="4.0" height="15.0" fill="rgb(230,191,32)" rx="2" ry="2" />
+<text  x="259.82" y="239.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_lock (1 samples, 0.08%)</title><rect x="381.7" y="197" width="1.0" height="15.0" fill="rgb(214,143,39)" rx="2" ry="2" />
+<text  x="384.70" y="207.5" ></text>
+</g>
+<g >
+<title>strlen (1 samples, 0.08%)</title><rect x="388.6" y="245" width="1.0" height="15.0" fill="rgb(212,90,45)" rx="2" ry="2" />
+<text  x="391.58" y="255.5" ></text>
+</g>
+<g >
+<title>__read_fn (64 samples, 5.33%)</title><rect x="395.5" y="197" width="62.9" height="15.0" fill="rgb(222,46,50)" rx="2" ry="2" />
+<text  x="398.47" y="207.5" >__read..</text>
+</g>
+<g >
+<title>pager_write (60 samples, 5.00%)</title><rect x="302.1" y="245" width="58.9" height="15.0" fill="rgb(230,111,20)" rx="2" ry="2" />
+<text  x="305.05" y="255.5" >pager_..</text>
+</g>
+<g >
+<title>local_getline (805 samples, 67.08%)</title><rect x="395.5" y="373" width="791.5" height="15.0" fill="rgb(205,140,8)" rx="2" ry="2" />
+<text  x="398.47" y="383.5" >local_getline</text>
+</g>
+<g >
+<title>sqlite3DbMallocRawNN (1 samples, 0.08%)</title><rect x="291.2" y="261" width="1.0" height="15.0" fill="rgb(224,117,47)" rx="2" ry="2" />
+<text  x="294.23" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3VdbeClearObject (1 samples, 0.08%)</title><rect x="213.5" y="261" width="1.0" height="15.0" fill="rgb(208,185,21)" rx="2" ry="2" />
+<text  x="216.55" y="271.5" ></text>
+</g>
+<g >
+<title>getAndInitPage (2 samples, 0.17%)</title><rect x="364.0" y="245" width="2.0" height="15.0" fill="rgb(240,217,14)" rx="2" ry="2" />
+<text  x="367.00" y="255.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_lock (1 samples, 0.08%)</title><rect x="200.8" y="293" width="1.0" height="15.0" fill="rgb(244,183,7)" rx="2" ry="2" />
+<text  x="203.77" y="303.5" ></text>
+</g>
+<g >
+<title>sqlite3GetToken (5 samples, 0.42%)</title><rect x="217.5" y="261" width="4.9" height="15.0" fill="rgb(218,172,6)" rx="2" ry="2" />
+<text  x="220.48" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3ExprCodeTarget (1 samples, 0.08%)</title><rect x="257.8" y="197" width="1.0" height="15.0" fill="rgb(246,0,15)" rx="2" ry="2" />
+<text  x="260.80" y="207.5" ></text>
+</g>
+<g >
+<title>sqlite3_free (5 samples, 0.42%)</title><rect x="377.8" y="213" width="4.9" height="15.0" fill="rgb(206,178,51)" rx="2" ry="2" />
+<text  x="380.77" y="223.5" ></text>
+</g>
+<g >
+<title>exprSetHeight (2 samples, 0.17%)</title><rect x="249.9" y="213" width="2.0" height="15.0" fill="rgb(215,62,15)" rx="2" ry="2" />
+<text  x="252.93" y="223.5" ></text>
+</g>
+<g >
+<title>sqlite3VdbeTransferError (1 samples, 0.08%)</title><rect x="214.5" y="261" width="1.0" height="15.0" fill="rgb(251,122,20)" rx="2" ry="2" />
+<text  x="217.53" y="271.5" ></text>
+</g>
+<g >
+<title>sqlite3ResolveExprNames (8 samples, 0.67%)</title><rect x="268.6" y="213" width="7.9" height="15.0" fill="rgb(218,45,54)" rx="2" ry="2" />
+<text  x="271.62" y="223.5" ></text>
+</g>
+<g >
+<title>__srefill_r (184 samples, 15.33%)</title><rect x="17.9" y="309" width="180.9" height="15.0" fill="rgb(225,179,40)" rx="2" ry="2" />
+<text  x="20.87" y="319.5" >__srefill_r</text>
+</g>
+<g >
+<title>clearSelect (1 samples, 0.08%)</title><rect x="255.8" y="229" width="1.0" height="15.0" fill="rgb(220,188,22)" rx="2" ry="2" />
+<text  x="258.83" y="239.5" ></text>
+</g>
+<g >
+<title>resolveExprStep (7 samples, 0.58%)</title><rect x="268.6" y="181" width="6.9" height="15.0" fill="rgb(247,29,17)" rx="2" ry="2" />
+<text  x="271.62" y="191.5" ></text>
+</g>
+<g >
+<title>pagerAddPageToRollbackJournal (1 samples, 0.08%)</title><rect x="300.1" y="213" width="1.0" height="15.0" fill="rgb(227,153,29)" rx="2" ry="2" />
+<text  x="303.08" y="223.5" ></text>
+</g>
+<g >
+<title>sys_read (184 samples, 15.33%)</title><rect x="17.9" y="213" width="180.9" height="15.0" fill="rgb(242,17,18)" rx="2" ry="2" />
+<text  x="20.87" y="223.5" >sys_read</text>
+</g>
+<g >
+<title>uk_malloc_ifpages (1 samples, 0.08%)</title><rect x="354.2" y="165" width="0.9" height="15.0" fill="rgb(253,153,11)" rx="2" ry="2" />
+<text  x="357.17" y="175.5" ></text>
+</g>
+<g >
+<title>sqlite3Insert (29 samples, 2.42%)</title><rect x="252.9" y="245" width="28.5" height="15.0" fill="rgb(241,100,43)" rx="2" ry="2" />
+<text  x="255.88" y="255.5" >sq..</text>
+</g>
+<g >
+<title>uk_9preq_waitreply (180 samples, 15.00%)</title><rect x="21.8" y="149" width="177.0" height="15.0" fill="rgb(234,128,45)" rx="2" ry="2" />
+<text  x="24.80" y="159.5" >uk_9preq_waitreply</text>
+</g>
+<g >
+<title>pthread_mutex_lock (3 samples, 0.25%)</title><rect x="355.1" y="197" width="3.0" height="15.0" fill="rgb(238,57,18)" rx="2" ry="2" />
+<text  x="358.15" y="207.5" ></text>
+</g>
+<g >
+<title>sqlite3VdbeReset (1 samples, 0.08%)</title><rect x="214.5" y="277" width="1.0" height="15.0" fill="rgb(209,96,16)" rx="2" ry="2" />
+<text  x="217.53" y="287.5" ></text>
+</g>
+<g >
+<title>uk_syscall_e_read (805 samples, 67.08%)</title><rect x="395.5" y="293" width="791.5" height="15.0" fill="rgb(220,219,47)" rx="2" ry="2" />
+<text  x="398.47" y="303.5" >uk_syscall_e_read</text>
+</g>
+<g >
+<title>moveToRoot (1 samples, 0.08%)</title><rect x="366.0" y="261" width="0.9" height="15.0" fill="rgb(207,125,36)" rx="2" ry="2" />
+<text  x="368.97" y="271.5" ></text>
+</g>
+<g >
+<title>allocSpace.part.125 (1 samples, 0.08%)</title><rect x="242.1" y="245" width="0.9" height="15.0" fill="rgb(236,86,49)" rx="2" ry="2" />
+<text  x="245.07" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3OpenTable (2 samples, 0.17%)</title><rect x="266.6" y="213" width="2.0" height="15.0" fill="rgb(239,222,33)" rx="2" ry="2" />
+<text  x="269.65" y="223.5" ></text>
+</g>
+<g >
+<title>bbuddy_pfree (4 samples, 0.33%)</title><rect x="377.8" y="197" width="3.9" height="15.0" fill="rgb(222,143,48)" rx="2" ry="2" />
+<text  x="380.77" y="207.5" ></text>
+</g>
+<g >
+<title>memcpy (2 samples, 0.17%)</title><rect x="386.6" y="197" width="2.0" height="15.0" fill="rgb(212,37,2)" rx="2" ry="2" />
+<text  x="389.62" y="207.5" ></text>
+</g>
+<g >
+<title>btreeEndTransaction (1 samples, 0.08%)</title><rect x="372.8" y="245" width="1.0" height="15.0" fill="rgb(213,61,43)" rx="2" ry="2" />
+<text  x="375.85" y="255.5" ></text>
+</g>
+<g >
+<title>findElementWithHash (4 samples, 0.33%)</title><rect x="269.6" y="165" width="3.9" height="15.0" fill="rgb(247,156,0)" rx="2" ry="2" />
+<text  x="272.60" y="175.5" ></text>
+</g>
+<g >
+<title>getCellInfo (1 samples, 0.08%)</title><rect x="287.3" y="293" width="1.0" height="15.0" fill="rgb(236,200,25)" rx="2" ry="2" />
+<text  x="290.30" y="303.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_lock (1 samples, 0.08%)</title><rect x="293.2" y="245" width="1.0" height="15.0" fill="rgb(254,109,0)" rx="2" ry="2" />
+<text  x="296.20" y="255.5" ></text>
+</g>
+<g >
+<title>pthreadMutexEnter (1 samples, 0.08%)</title><rect x="292.2" y="261" width="1.0" height="15.0" fill="rgb(207,157,16)" rx="2" ry="2" />
+<text  x="295.22" y="271.5" ></text>
+</g>
+<g >
+<title>allocateCursor (1 samples, 0.08%)</title><rect x="291.2" y="277" width="1.0" height="15.0" fill="rgb(254,73,27)" rx="2" ry="2" />
+<text  x="294.23" y="287.5" ></text>
+</g>
+<g >
+<title>sqlite3_strnicmp.part.365 (1 samples, 0.08%)</title><rect x="394.5" y="341" width="1.0" height="15.0" fill="rgb(247,195,8)" rx="2" ry="2" />
+<text  x="397.48" y="351.5" ></text>
+</g>
+<g >
+<title>sqlite3BtreeLast (5 samples, 0.42%)</title><rect x="362.0" y="277" width="4.9" height="15.0" fill="rgb(230,97,34)" rx="2" ry="2" />
+<text  x="365.03" y="287.5" ></text>
+</g>
+<g >
+<title>sqlite3BtreeCloseCursor (1 samples, 0.08%)</title><rect x="368.9" y="245" width="1.0" height="15.0" fill="rgb(214,48,52)" rx="2" ry="2" />
+<text  x="371.92" y="255.5" ></text>
+</g>
+<g >
+<title>pagerAddPageToRollbackJournal (53 samples, 4.42%)</title><rect x="303.0" y="229" width="52.1" height="15.0" fill="rgb(220,226,16)" rx="2" ry="2" />
+<text  x="306.03" y="239.5" >pager..</text>
+</g>
+<g >
+<title>sqlite3VdbeHalt (17 samples, 1.42%)</title><rect x="366.9" y="277" width="16.8" height="15.0" fill="rgb(228,61,2)" rx="2" ry="2" />
+<text  x="369.95" y="287.5" ></text>
+</g>
+<g >
+<title>hv_console_input (713 samples, 59.42%)</title><rect x="458.4" y="197" width="701.1" height="15.0" fill="rgb(218,105,52)" rx="2" ry="2" />
+<text  x="461.40" y="207.5" >hv_console_input</text>
+</g>
+<g >
+<title>sqlite3DbFreeNN (1 samples, 0.08%)</title><rect x="248.0" y="245" width="0.9" height="15.0" fill="rgb(234,203,43)" rx="2" ry="2" />
+<text  x="250.97" y="255.5" ></text>
+</g>
+<g >
+<title>sqlite3_prepare_v2 (1 samples, 0.08%)</title><rect x="390.5" y="325" width="1.0" height="15.0" fill="rgb(243,51,40)" rx="2" ry="2" />
+<text  x="393.55" y="335.5" ></text>
+</g>
+<g >
+<title>pthread_mutex_unlock (2 samples, 0.17%)</title><rect x="375.8" y="213" width="2.0" height="15.0" fill="rgb(208,203,51)" rx="2" ry="2" />
+<text  x="378.80" y="223.5" ></text>
+</g>
+</g>
+</svg>
